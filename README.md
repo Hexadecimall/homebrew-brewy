@@ -24,11 +24,12 @@ brew install Hexadecimall/brewy/brewy
 Or add the tap first:
 
 ```sh
+brew trust --formula Hexadecimall/brewy/brewy
 brew tap Hexadecimall/brewy
 brew install brewy
 ```
 
-Homebrew expands `Hexadecimall/brewy` to the GitHub repository named `Hexadecimall/homebrew-brewy`.
+Homebrew 6.0 and newer requires explicit trust for non-official taps. The command above trusts only the Brewy formula, not every future item in the tap. Homebrew expands `Hexadecimall/brewy` to the GitHub repository named `Hexadecimall/homebrew-brewy`.
 
 ## Install from source
 
