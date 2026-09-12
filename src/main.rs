@@ -3,31 +3,66 @@ mod brew;
 mod model;
 mod view;
 
-use std::{io, sync::mpsc, time::Duration};
+use std::{
+    io::{self, Write},
+    sync::{Arc, atomic::AtomicBool, mpsc},
+    time::Duration,
+};
 
 use app::App;
 use crossterm::{
+    cursor::{SetCursorStyle, Show},
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    style::ResetColor,
+    terminal::{
+        EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
+use signal_hook::{SigId, consts::SIGINT, flag};
 
 struct TerminalGuard;
 
 impl TerminalGuard {
     fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+        if let Err(error) = execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture) {
+            restore_terminal();
+            return Err(error);
+        }
         Ok(Self)
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        restore_terminal();
     }
+}
+
+fn restore_terminal() {
+    let _ = disable_raw_mode();
+    let _ = write_terminal_restore(&mut io::stdout());
+}
+
+fn write_terminal_restore(writer: &mut impl Write) -> io::Result<()> {
+    execute!(
+        writer,
+        DisableMouseCapture,
+        LeaveAlternateScreen,
+        Show,
+        SetCursorStyle::DefaultUserShape,
+        EnableLineWrap,
+        ResetColor
+    )
+}
+
+fn install_sigint_handler() -> io::Result<(SigId, Arc<AtomicBool>)> {
+    let seen = Arc::new(AtomicBool::new(false));
+    let handler = flag::register(SIGINT, Arc::clone(&seen))?;
+    Ok((handler, seen))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,6 +80,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if which_brew().is_none() {
         return Err("Homebrew is not available in PATH".into());
     }
+
+    let (_sigint_handler, _sigint_seen) = install_sigint_handler()?;
 
     let (tx, rx) = mpsc::channel();
     let mut app = App::new(tx.clone());
@@ -81,4 +118,40 @@ fn which_brew() -> Option<()> {
         .ok()?
         .success()
         .then_some(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+
+    use super::{install_sigint_handler, write_terminal_restore};
+
+    #[test]
+    fn terminal_restore_resets_screen_cursor_and_line_wrapping() {
+        let mut output = Vec::new();
+        write_terminal_restore(&mut output).expect("terminal restore commands should render");
+
+        let output = String::from_utf8(output).expect("terminal commands should be UTF-8");
+        assert!(output.contains("\x1b[?1049l"));
+        assert!(output.contains("\x1b[?25h"));
+        assert!(output.contains("\x1b[0 q"));
+        assert!(output.contains("\x1b[?7h"));
+        assert!(output.contains("\x1b[0m"));
+    }
+
+    #[test]
+    fn sigint_is_captured_instead_of_terminating() {
+        let (handler, seen) = install_sigint_handler().expect("SIGINT handler should install");
+        signal_hook::low_level::raise(signal_hook::consts::SIGINT)
+            .expect("SIGINT should be delivered");
+
+        for _ in 0..100 {
+            if seen.load(Ordering::Relaxed) {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        signal_hook::low_level::unregister(handler);
+        assert!(seen.load(Ordering::Relaxed));
+    }
 }

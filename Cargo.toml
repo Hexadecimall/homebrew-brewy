@@ -1,6 +1,6 @@
 [package]
 name = "brewy"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A fast terminal interface for Homebrew"
 license = "MIT"
@@ -10,13 +10,14 @@ readme = "README.md"
 rust-version = "1.88"
 keywords = ["homebrew", "tui", "macos", "terminal"]
 categories = ["command-line-utilities"]
-exclude = ["code", "fanctl_fix/**"]
+exclude = ["bottles/**", "code", "fanctl_fix/**"]
 
 [dependencies]
 crossterm = "0.29.0"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.142"
+signal-hook = "0.3.18"
 
 [profile.release]
 lto = "thin"
