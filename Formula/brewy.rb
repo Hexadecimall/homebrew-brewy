@@ -2,15 +2,10 @@ class Brewy < Formula
   desc "Fast terminal interface for Homebrew"
   homepage "https://github.com/Hexadecimall/homebrew-brewy"
   url "https://github.com/Hexadecimall/homebrew-brewy.git",
-      tag:      "v0.1.0",
-      revision: "f2a351f0829b953414d7f64b53d3553a88d0c8c5"
+      tag:      "v0.1.1",
+      revision: "6feb4f8b31e5f02e97a3d263be9a62e518f86bf7"
   license "MIT"
   head "https://github.com/Hexadecimall/homebrew-brewy.git", branch: "main"
-
-  bottle do
-    root_url "https://raw.githubusercontent.com/Hexadecimall/homebrew-brewy/main/bottles"
-    sha256 cellar: :any_skip_relocation, arm64_golden_gate: "42ff632fd138e8089af984657e1035d0f3d335f4d3b5ac9320861fe05a4ca8b8"
-  end
 
   depends_on "rust" => :build
   depends_on :macos
