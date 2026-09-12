@@ -1,7 +1,9 @@
 class Brewy < Formula
   desc "Fast terminal interface for Homebrew"
   homepage "https://github.com/Hexadecimall/homebrew-brewy"
-  url "https://github.com/Hexadecimall/homebrew-brewy.git", tag: "v0.1.0"
+  url "https://github.com/Hexadecimall/homebrew-brewy.git",
+      tag:      "v0.1.0",
+      revision: "f2a351f0829b953414d7f64b53d3553a88d0c8c5"
   license "MIT"
   head "https://github.com/Hexadecimall/homebrew-brewy.git", branch: "main"
 
