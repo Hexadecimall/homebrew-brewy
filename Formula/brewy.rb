@@ -11,6 +11,13 @@ class Brewy < Formula
   depends_on :macos
 
   def install
+    rustflags = [
+      "--remap-path-prefix=#{buildpath}=.",
+      "--remap-path-prefix=#{HOMEBREW_CACHE}=/homebrew-cache",
+      "--remap-path-prefix=#{HOMEBREW_PREFIX}/Cellar/rust=/homebrew-rust",
+    ]
+    ENV["CARGO_ENCODED_RUSTFLAGS"] = rustflags.join("\x1f")
+
     system "cargo", "install", *std_cargo_args(path: ".")
   end
 
