@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Margin, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols,
     text::{Line, Span, Text},
@@ -21,27 +21,25 @@ const GREEN: Color = Color::Rgb(158, 206, 106);
 const YELLOW: Color = Color::Rgb(224, 175, 104);
 const MAGENTA: Color = Color::Rgb(187, 154, 247);
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(
         Block::default().style(Style::default().bg(BG).fg(FG)),
         frame.area(),
     );
-    let page = frame.area().inner(Margin {
-        vertical: 0,
-        horizontal: if frame.area().width > 90 { 2 } else { 1 },
-    });
+    let page = frame.area();
+    let wide = page.width >= 105;
     let rows = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Length(3),
         Constraint::Length(2),
-        Constraint::Min(5),
-        Constraint::Length(2),
+        Constraint::Length(3),
+        Constraint::Length(if wide { 0 } else { 2 }),
+        Constraint::Min(3),
+        Constraint::Length(1),
     ])
     .split(page);
 
     draw_wordmark(frame, app, rows[0]);
     draw_prompt(frame, app, rows[1]);
-    if page.width >= 105 {
+    if wide {
         let columns = if app.preview_visible {
             Layout::horizontal([
                 Constraint::Length(22),
@@ -66,13 +64,6 @@ pub fn draw(frame: &mut Frame, app: &App) {
             draw_divider(frame, columns[3]);
             draw_preview(frame, app, columns[4], true);
         }
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "full catalog  ·  type to search  ·  ←/→ switch section",
-                Style::default().fg(MUTED),
-            )),
-            rows[2],
-        );
     } else {
         draw_filters(frame, app, rows[2]);
         let compact = Layout::vertical([
@@ -105,8 +96,7 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
     let sections = Layout::vertical([
         Constraint::Length(9),
         Constraint::Length(1),
-        Constraint::Min(5),
-        Constraint::Length(7),
+        Constraint::Min(1),
     ])
     .split(area);
     frame.render_widget(
@@ -176,17 +166,6 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
             .collect()
     };
     frame.render_widget(Paragraph::new(queue_lines), sections[2]);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![key("enter"), hint("  run now")]),
-            Line::from(vec![key("tab"), hint("    select")]),
-            Line::from(vec![key("ctrl-r"), hint(" refresh")]),
-            Line::from(vec![key("ctrl-u"), hint(" brew update")]),
-            Line::from(vec![key("ctrl-g"), hint(" upgrade all")]),
-            Line::from(vec![key("alt-p"), hint("  preview")]),
-        ]),
-        sections[3],
-    );
 }
 
 fn draw_wordmark(frame: &mut Frame, app: &App, area: Rect) {
@@ -199,9 +178,10 @@ fn draw_wordmark(frame: &mut Frame, app: &App, area: Rect) {
     };
     let mut title = vec![
         Span::styled(
-            "  BREWY",
+            " BREWY",
             Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
         ),
+        Span::styled("  ? = help", Style::default().fg(FG)),
         Span::styled("  ──", Style::default().fg(BLUE)),
     ];
     if area.width >= 62 {
@@ -210,13 +190,7 @@ fn draw_wordmark(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(MUTED),
         ));
     }
-    let logo = Text::from(vec![
-        Line::from(title),
-        Line::from(Span::styled(
-            "  search · select · install",
-            Style::default().fg(MUTED),
-        )),
-    ]);
+    let logo = Text::from(Line::from(title));
     frame.render_widget(Paragraph::new(logo), area);
     frame.render_widget(
         Paragraph::new(Line::from(state)).alignment(Alignment::Right),
@@ -285,7 +259,7 @@ fn draw_filters(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_results(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.tab == Tab::Taps {
         draw_taps(frame, app, area);
         return;
@@ -360,12 +334,12 @@ fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         );
-    let mut state =
-        ListState::default().with_selected((!indices.is_empty()).then_some(app.selected));
-    frame.render_stateful_widget(list, area, &mut state);
+    app.result_list_state
+        .select((!indices.is_empty()).then_some(app.selected));
+    frame.render_stateful_widget(list, area, &mut app.result_list_state);
 }
 
-fn draw_taps(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_taps(frame: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = app
         .catalog
         .taps
@@ -377,37 +351,34 @@ fn draw_taps(frame: &mut Frame, app: &App, area: Rect) {
             ]))
         })
         .collect();
-    let mut state = ListState::default().with_selected((!items.is_empty()).then_some(app.selected));
+    app.result_list_state
+        .select((!items.is_empty()).then_some(app.selected));
     frame.render_stateful_widget(
         List::new(items)
             .block(Block::default().padding(Padding::vertical(1)))
             .highlight_symbol("›")
             .highlight_style(Style::default().bg(SELECTED).add_modifier(Modifier::BOLD)),
         area,
-        &mut state,
+        &mut app.result_list_state,
     );
 }
 
-fn draw_preview(frame: &mut Frame, app: &App, area: Rect, wide: bool) {
+fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect, wide: bool) {
     let block = Block::default()
         .borders(if wide { Borders::NONE } else { Borders::TOP })
         .border_style(Style::default().fg(BORDER))
-        .title(Line::from(vec![
-            Span::styled(
-                if wide {
-                    "PACKAGE INFO"
-                } else {
-                    " package info "
-                },
-                Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                " alt-p hide  ·  alt-j/k scroll ",
-                Style::default().fg(MUTED),
-            ),
-        ]))
+        .title(Span::styled(
+            if wide {
+                "PACKAGE INFO"
+            } else {
+                " package info "
+            },
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        ))
         .padding(Padding::horizontal(if wide { 2 } else { 1 }));
     if app.tab == Tab::Taps {
+        app.preview_scroll = 0;
+        app.preview_max_scroll = 0;
         let selected = app
             .catalog
             .taps
@@ -431,6 +402,8 @@ fn draw_preview(frame: &mut Frame, app: &App, area: Rect, wide: bool) {
         return;
     }
     let Some(package) = app.selected_package() else {
+        app.preview_scroll = 0;
+        app.preview_max_scroll = 0;
         frame.render_widget(
             Paragraph::new(Span::styled(
                 if app.loading {
@@ -468,13 +441,6 @@ fn draw_preview(frame: &mut Frame, app: &App, area: Rect, wide: bool) {
         .description
         .as_deref()
         .unwrap_or("Loading package description…");
-    let action = if package.outdated {
-        "upgrade"
-    } else if package.installed {
-        "uninstall"
-    } else {
-        "install"
-    };
     let mut lines = vec![
         Line::from(""),
         Line::from(vec![
@@ -519,19 +485,6 @@ fn draw_preview(frame: &mut Frame, app: &App, area: Rect, wide: bool) {
             sanitize_text(package.homepage.as_deref().unwrap_or("—")),
             Style::default().fg(CYAN),
         )]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "ACTION",
-            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(vec![
-            key("enter"),
-            Span::styled(format!("  {action} now"), Style::default().fg(FG)),
-        ]),
-        Line::from(vec![
-            key("tab"),
-            Span::styled("    toggle selection", Style::default().fg(FG)),
-        ]),
     ];
     if !app.log.is_empty() {
         lines.push(Line::from(""));
@@ -552,32 +505,21 @@ fn draw_preview(frame: &mut Frame, app: &App, area: Rect, wide: bool) {
             ))
         }));
     }
-    let details = Text::from(lines);
-    frame.render_widget(
-        Paragraph::new(details)
-            .scroll((app.preview_scroll, 0))
-            .wrap(Wrap { trim: true })
-            .block(block),
-        area,
-    );
+    let inner = block.inner(area);
+    let content_width = inner.width.max(1) as usize;
+    let rendered_lines = lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(content_width))
+        .sum::<usize>();
+    app.preview_max_scroll = rendered_lines
+        .saturating_sub(inner.height as usize)
+        .min(u16::MAX as usize) as u16;
+    app.preview_scroll = app.preview_scroll.min(app.preview_max_scroll);
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true });
+    frame.render_widget(paragraph.scroll((app.preview_scroll, 0)).block(block), area);
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
-    let controls = Line::from(vec![
-        key("type"),
-        hint(" search  "),
-        key("tab"),
-        hint(" select  "),
-        key("enter"),
-        hint(" apply  "),
-        key("←→"),
-        hint(" filter  "),
-        key("?"),
-        hint(" help  "),
-        key("ctrl-q"),
-        hint(" quit"),
-    ]);
-    frame.render_widget(Paragraph::new(controls), area);
     let right = if app.queue.is_empty() {
         app.status.clone()
     } else {
@@ -585,7 +527,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     };
     let status_area = Rect {
         x: area.x,
-        y: area.y.saturating_add(1),
+        y: area.y,
         width: area.width,
         height: 1,
     };
@@ -595,14 +537,6 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             .alignment(Alignment::Right),
         status_area,
     );
-}
-
-fn key(value: &'static str) -> Span<'static> {
-    Span::styled(value, Style::default().fg(FG).add_modifier(Modifier::BOLD))
-}
-
-fn hint(value: &'static str) -> Span<'static> {
-    Span::styled(value, Style::default().fg(MUTED))
 }
 
 fn dialog(title: &'static str) -> Block<'static> {
@@ -702,9 +636,11 @@ fn truncate(value: &str, max: usize) -> String {
 mod tests {
     use std::sync::mpsc;
 
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
+    use crate::model::{Catalog, Package, PackageKind};
 
     #[test]
     fn terminal_control_characters_are_removed_from_external_text() {
@@ -717,12 +653,63 @@ mod tests {
     #[test]
     fn layout_renders_at_small_standard_and_wide_sizes() {
         let (tx, _) = mpsc::channel();
-        let app = App::new(tx);
+        let mut app = App::new(tx);
         for (width, height) in [(20, 8), (80, 24), (120, 35), (200, 60)] {
             let backend = TestBackend::new(width, height);
             let mut terminal = Terminal::new(backend).unwrap();
-            terminal.draw(|frame| draw(frame, &app)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         }
+    }
+
+    #[test]
+    fn scrolling_up_keeps_the_existing_list_viewport() {
+        let (tx, _) = mpsc::channel();
+        let mut app = App::new(tx);
+        let packages = (0..80)
+            .map(|index| Package::new(format!("package-{index:02}"), PackageKind::Formula))
+            .collect();
+        app.use_cached_catalog(Catalog {
+            packages,
+            taps: Vec::new(),
+        });
+        for _ in 0..30 {
+            app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let scrolled_offset = app.result_list_state.offset();
+        assert!(scrolled_offset > 0);
+
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        assert_eq!(app.result_list_state.offset(), scrolled_offset);
+    }
+
+    #[test]
+    fn package_info_scroll_is_clamped_to_rendered_content() {
+        let (tx, _) = mpsc::channel();
+        let mut app = App::new(tx);
+        let mut package = Package::new("demo".into(), PackageKind::Formula);
+        package.description = Some(
+            (0..100)
+                .map(|_| "description")
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        app.use_cached_catalog(Catalog {
+            packages: vec![package],
+            taps: Vec::new(),
+        });
+        app.preview_scroll = u16::MAX;
+
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        assert_eq!(app.preview_scroll, app.preview_max_scroll);
+        assert!(app.preview_max_scroll < u16::MAX);
     }
 
     #[test]

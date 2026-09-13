@@ -5,6 +5,7 @@ use std::{
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use ratatui::widgets::ListState;
 
 use crate::{
     brew::{self, WorkerEvent},
@@ -87,6 +88,8 @@ pub struct App {
     pub failed_operations: usize,
     pub preview_visible: bool,
     pub preview_scroll: u16,
+    pub(crate) preview_max_scroll: u16,
+    pub(crate) result_list_state: ListState,
     tab_counts: [usize; 4],
     visible_indices: Vec<usize>,
     detail_requested: HashSet<(PackageKind, String)>,
@@ -112,6 +115,8 @@ impl App {
             failed_operations: 0,
             preview_visible: true,
             preview_scroll: 0,
+            preview_max_scroll: 0,
+            result_list_state: ListState::default(),
             tab_counts: [0; 4],
             visible_indices: Vec::new(),
             detail_requested: HashSet::new(),
@@ -207,6 +212,11 @@ impl App {
         self.selected = self
             .selected
             .min(self.visible_indices.len().saturating_sub(1));
+        self.result_list_state
+            .select((!self.visible_indices.is_empty()).then_some(self.selected));
+        if self.selected == 0 {
+            *self.result_list_state.offset_mut() = 0;
+        }
     }
 
     fn compare_packages(&self, left: &Package, right: &Package) -> Ordering {
@@ -255,7 +265,12 @@ impl App {
         if event.modifiers.contains(KeyModifiers::ALT) {
             match event.code {
                 KeyCode::Char('p') => self.preview_visible = !self.preview_visible,
-                KeyCode::Char('j') => self.preview_scroll = self.preview_scroll.saturating_add(3),
+                KeyCode::Char('j') => {
+                    self.preview_scroll = self
+                        .preview_scroll
+                        .saturating_add(3)
+                        .min(self.preview_max_scroll)
+                }
                 KeyCode::Char('k') => self.preview_scroll = self.preview_scroll.saturating_sub(3),
                 _ => {}
             }
@@ -343,6 +358,8 @@ impl App {
     fn move_selection(&mut self, delta: isize) {
         let max = self.item_count().saturating_sub(1) as isize;
         self.selected = (self.selected as isize + delta).clamp(0, max) as usize;
+        self.result_list_state
+            .select((self.item_count() > 0).then_some(self.selected));
         self.preview_scroll = 0;
     }
 

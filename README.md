@@ -10,6 +10,7 @@ Brewy is a search-first Homebrew TUI for macOS. Its sparse full-screen interface
 - Installed, outdated, cask, and tap views
 - Type-anywhere ranked fuzzy search and sortable package lists
 - Inline package metadata preview with preview scrolling
+- Edge-to-edge terminal layout with a single always-visible help hint
 - Stage several installs, removals, upgrades, and pin changes
 - Run the current item or multi-selection directly with `Enter`
 - Stream command output inline without interrupting the package list

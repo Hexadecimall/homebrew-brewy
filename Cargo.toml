@@ -1,6 +1,6 @@
 [package]
 name = "brewy"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "A fast terminal interface for Homebrew"
 license = "MIT"

@@ -100,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.handle_worker_event(message);
         }
         app.request_selected_detail();
-        terminal.draw(|frame| view::draw(frame, &app))?;
+        terminal.draw(|frame| view::draw(frame, &mut app))?;
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) if key.kind == event::KeyEventKind::Press => app.handle_key(key),
