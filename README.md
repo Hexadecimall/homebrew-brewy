@@ -5,12 +5,15 @@ Brewy is a search-first Homebrew TUI for macOS. Its sparse full-screen interface
 ## Features
 
 - Browse formulae and casks from the active Homebrew installation
+- Open instantly from a compact local catalog cache while package state refreshes in the background
+- Load formula and cask descriptions in one background metadata refresh instead of one process per selection
 - Installed, outdated, cask, and tap views
 - Type-anywhere ranked fuzzy search and sortable package lists
 - Inline package metadata preview with preview scrolling
 - Stage several installs, removals, upgrades, and pin changes
 - Run the current item or multi-selection directly with `Enter`
 - Stream command output inline without interrupting the package list
+- Update Homebrew metadata with `Ctrl-U` or upgrade every outdated package with `Ctrl-G`
 - TokyoNight-inspired color palette and mouse-wheel navigation
 
 ## Install with Homebrew
@@ -54,4 +57,4 @@ The `brew` executable must be available in `PATH`. Brewy never invokes `sudo`. `
 
 ## Keyboard
 
-Press `?` inside Brewy for the complete reference. Start typing to search, use `Tab` to multi-select packages, and press `Enter` to run the selected actions. Arrow keys navigate results, `Alt-P` toggles the package preview, and `Ctrl-Q` exits.
+Press `?` inside Brewy for the complete reference. Start typing to search, use `Tab` to multi-select packages, and press `Enter` to run the selected actions. Arrow keys navigate results, `Alt-P` toggles the package preview, `Ctrl-U` runs `brew update`, `Ctrl-G` upgrades all outdated packages, and `Ctrl-Q` exits.

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Hash, Serialize)]
 pub enum PackageKind {
     Formula,
     Cask,
@@ -17,7 +17,7 @@ impl PackageKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Package {
     pub name: String,
     pub kind: PackageKind,
@@ -56,6 +56,7 @@ pub enum Operation {
     Pin { name: String },
     Unpin { name: String },
     Update,
+    UpgradeAll,
 }
 
 impl Operation {
@@ -66,7 +67,7 @@ impl Operation {
             | Self::Upgrade { name, .. }
             | Self::Pin { name }
             | Self::Unpin { name } => Some(name),
-            Self::Update => None,
+            Self::Update | Self::UpgradeAll => None,
         }
     }
 
@@ -78,6 +79,7 @@ impl Operation {
             Self::Pin { .. } => "pin",
             Self::Unpin { .. } => "unpin",
             Self::Update => "update metadata",
+            Self::UpgradeAll => "upgrade all packages",
         }
     }
 
@@ -89,6 +91,7 @@ impl Operation {
             Self::Pin { name } => vec!["pin".into(), "--".into(), name.clone()],
             Self::Unpin { name } => vec!["unpin".into(), "--".into(), name.clone()],
             Self::Update => vec!["update".into()],
+            Self::UpgradeAll => vec!["upgrade".into()],
         }
     }
 
@@ -110,7 +113,7 @@ fn package_command(verb: &str, name: &str, cask: bool) -> Vec<String> {
     args
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Catalog {
     pub packages: Vec<Package>,
     pub taps: Vec<String>,
@@ -190,6 +193,96 @@ impl Catalog {
         package.installed = package.installed_version.is_some();
         Ok(package)
     }
+
+    pub fn apply_metadata_outputs(
+        &mut self,
+        formula_json: &str,
+        cask_json: &str,
+    ) -> Result<(), String> {
+        let formulae: Vec<BrewItem> = serde_json::from_str(formula_json)
+            .map_err(|error| format!("cannot parse formula metadata: {error}"))?;
+        let casks: Vec<BrewItem> = serde_json::from_str(cask_json)
+            .map_err(|error| format!("cannot parse cask metadata: {error}"))?;
+        apply_metadata_items(&mut self.packages, formulae, PackageKind::Formula);
+        apply_metadata_items(&mut self.packages, casks, PackageKind::Cask);
+        self.packages.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        Ok(())
+    }
+
+    pub fn merge_cached_metadata(&mut self, cached: &Self) {
+        let positions: HashMap<_, _> = self
+            .packages
+            .iter()
+            .enumerate()
+            .map(|(index, package)| ((package.kind, package.name.clone()), index))
+            .collect();
+        for cached_package in &cached.packages {
+            if let Some(index) = positions
+                .get(&(cached_package.kind, cached_package.name.clone()))
+                .copied()
+            {
+                let package = &mut self.packages[index];
+                fill_missing(&mut package.description, &cached_package.description);
+                fill_missing(&mut package.homepage, &cached_package.homepage);
+                fill_missing(&mut package.license, &cached_package.license);
+                fill_missing(&mut package.latest_version, &cached_package.latest_version);
+            } else {
+                let mut package = cached_package.clone();
+                package.installed = false;
+                package.outdated = false;
+                package.pinned = false;
+                package.installed_version = None;
+                self.packages.push(package);
+            }
+        }
+        self.packages.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+    }
+}
+
+fn fill_missing(target: &mut Option<String>, source: &Option<String>) {
+    if target.is_none() {
+        target.clone_from(source);
+    }
+}
+
+fn apply_metadata_items(packages: &mut Vec<Package>, items: Vec<BrewItem>, kind: PackageKind) {
+    let mut positions: HashMap<(PackageKind, String), usize> = packages
+        .iter()
+        .enumerate()
+        .map(|(index, package)| ((package.kind, package.name.clone()), index))
+        .collect();
+    for item in items {
+        let name = item
+            .token
+            .or_else(|| item.name.and_then(OneOrMany::first))
+            .or(item.full_name)
+            .unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let index = *positions.entry((kind, name.clone())).or_insert_with(|| {
+            packages.push(Package::new(name, kind));
+            packages.len() - 1
+        });
+        let package = &mut packages[index];
+        package.description = Some(
+            item.desc
+                .unwrap_or_else(|| "No description provided by Homebrew".into()),
+        );
+        if item.homepage.is_some() {
+            package.homepage = item.homepage;
+        }
+        if item.license.is_some() {
+            package.license = item.license;
+        }
+        let version = item
+            .current_version
+            .or_else(|| item.versions.and_then(|versions| versions.stable))
+            .or(item.version);
+        if version.is_some() {
+            package.latest_version = version;
+        }
+    }
 }
 
 fn apply_items(
@@ -217,7 +310,7 @@ fn apply_items(
         package.outdated |= item.outdated || !installed;
         if installed {
             package.installed = true;
-            package.installed_version = item.installed.version().or(item.version.clone());
+            package.installed_version = item.installed.as_ref().and_then(InstalledField::version);
         }
         package.latest_version = item
             .current_version
@@ -244,7 +337,7 @@ struct BrewItem {
     homepage: Option<String>,
     license: Option<String>,
     #[serde(default)]
-    installed: InstalledField,
+    installed: Option<InstalledField>,
     versions: Option<Versions>,
     version: Option<String>,
     current_version: Option<String>,
@@ -280,12 +373,6 @@ impl OneOrMany {
 enum InstalledField {
     Entries(Vec<InstalledVersion>),
     Version(String),
-}
-
-impl Default for InstalledField {
-    fn default() -> Self {
-        Self::Entries(Vec::new())
-    }
 }
 
 impl InstalledField {
@@ -441,5 +528,61 @@ mod tests {
         assert!(package.installed);
         assert_eq!(package.installed_version.as_deref(), Some("2.0"));
         assert_eq!(package.latest_version.as_deref(), Some("2.1"));
+    }
+
+    #[test]
+    fn available_cask_version_is_not_treated_as_installed() {
+        let json =
+            r#"{"formulae":[],"casks":[{"token":"sample-app","installed":null,"version":"2.1"}]}"#;
+        let package = Catalog::package_from_json(json).unwrap();
+        assert!(!package.installed);
+        assert_eq!(package.installed_version, None);
+        assert_eq!(package.latest_version.as_deref(), Some("2.1"));
+    }
+
+    #[test]
+    fn bulk_metadata_populates_descriptions_without_detail_commands() {
+        let mut catalog = Catalog::from_outputs(
+            "jq\n",
+            "ghostty\n",
+            r#"{"formulae":[],"casks":[]}"#,
+            r#"{"formulae":[],"casks":[]}"#,
+            "",
+        )
+        .unwrap();
+        catalog
+            .apply_metadata_outputs(
+                r#"[{"name":"jq","desc":"JSON processor","homepage":"https://jqlang.org/","license":"MIT","versions":{"stable":"1.8.1"}}]"#,
+                r#"[{"token":"ghostty","desc":"Terminal emulator","homepage":"https://ghostty.org/","version":"1.2.3"},{"token":"undocumented","desc":null,"homepage":"https://example.com/","version":"1.0"}]"#,
+            )
+            .unwrap();
+
+        let jq = catalog
+            .packages
+            .iter()
+            .find(|package| package.name == "jq")
+            .unwrap();
+        assert_eq!(jq.description.as_deref(), Some("JSON processor"));
+        assert_eq!(jq.latest_version.as_deref(), Some("1.8.1"));
+        let ghostty = catalog
+            .packages
+            .iter()
+            .find(|package| package.name == "ghostty")
+            .unwrap();
+        assert_eq!(ghostty.description.as_deref(), Some("Terminal emulator"));
+        let undocumented = catalog
+            .packages
+            .iter()
+            .find(|package| package.name == "undocumented")
+            .unwrap();
+        assert_eq!(
+            undocumented.description.as_deref(),
+            Some("No description provided by Homebrew")
+        );
+    }
+
+    #[test]
+    fn upgrade_all_runs_homebrew_upgrade() {
+        assert_eq!(Operation::UpgradeAll.command(), ["upgrade"]);
     }
 }

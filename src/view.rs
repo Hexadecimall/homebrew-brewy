@@ -7,10 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 
-use crate::{
-    app::{App, Overlay, Tab},
-    model::PackageKind,
-};
+use crate::app::{App, Overlay, Tab};
 
 const BG: Color = Color::Rgb(26, 27, 38);
 const SURFACE: Color = Color::Rgb(30, 32, 48);
@@ -133,7 +130,7 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(if *tab == app.tab { FG } else { MUTED }),
                 ),
                 Span::styled(
-                    tab_count(app, *tab).to_string(),
+                    app.tab_count(*tab).to_string(),
                     Style::default().fg(if *tab == app.tab { BLUE } else { BORDER }),
                 ),
             ]))
@@ -184,6 +181,8 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
             Line::from(vec![key("enter"), hint("  run now")]),
             Line::from(vec![key("tab"), hint("    select")]),
             Line::from(vec![key("ctrl-r"), hint(" refresh")]),
+            Line::from(vec![key("ctrl-u"), hint(" brew update")]),
+            Line::from(vec![key("ctrl-g"), hint(" upgrade all")]),
             Line::from(vec![key("alt-p"), hint("  preview")]),
         ]),
         sections[3],
@@ -268,7 +267,7 @@ fn draw_filters(frame: &mut Frame, app: &App, area: Rect) {
             format!(
                 " {}  {} ",
                 tab.label().to_ascii_lowercase(),
-                tab_count(app, *tab)
+                app.tab_count(*tab)
             ),
             Style::default()
                 .fg(if active { BG } else { MUTED })
@@ -284,21 +283,6 @@ fn draw_filters(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-fn tab_count(app: &App, tab: Tab) -> usize {
-    match tab {
-        Tab::Browse => app.catalog.packages.len(),
-        Tab::Installed => app.catalog.installed_count(),
-        Tab::Outdated => app.catalog.outdated_count(),
-        Tab::Casks => app
-            .catalog
-            .packages
-            .iter()
-            .filter(|package| package.kind == PackageKind::Cask)
-            .count(),
-        Tab::Taps => app.catalog.taps.len(),
-    }
 }
 
 fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
@@ -663,7 +647,8 @@ fn draw_help(frame: &mut Frame) {
         help("alt-j / alt-k", "scroll package preview"),
         help("ctrl-a", "run the selection queue"),
         help("ctrl-r", "refresh package state"),
-        help("ctrl-u", "update Homebrew metadata"),
+        help("ctrl-u", "run brew update and refresh metadata"),
+        help("ctrl-g", "upgrade every outdated package"),
         help("ctrl-s", "cycle sorting"),
         help("ctrl-p", "pin or unpin an installed formula"),
         help("ctrl-q", "quit after active operations finish"),

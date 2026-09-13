@@ -77,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     }
-    if which_brew().is_none() {
+    if !brew_is_available() {
         return Err("Homebrew is not available in PATH".into());
     }
 
@@ -85,7 +85,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (tx, rx) = mpsc::channel();
     let mut app = App::new(tx.clone());
-    brew::load_catalog(tx);
+    if let Some(catalog) = brew::cached_catalog() {
+        app.use_cached_catalog(catalog);
+    }
+    brew::load_catalog(tx, false);
 
     let _guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
@@ -109,15 +112,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn which_brew() -> Option<()> {
-    std::process::Command::new("brew")
-        .arg("--prefix")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .ok()?
-        .success()
-        .then_some(())
+fn brew_is_available() -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|path| path.join("brew").is_file()))
 }
 
 #[cfg(test)]

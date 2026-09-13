@@ -1,4 +1,8 @@
-use std::{cmp::Ordering, collections::HashSet, sync::mpsc::Sender};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+    sync::mpsc::Sender,
+};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 
@@ -83,7 +87,10 @@ pub struct App {
     pub failed_operations: usize,
     pub preview_visible: bool,
     pub preview_scroll: u16,
-    detail_requested: HashSet<String>,
+    tab_counts: [usize; 4],
+    visible_indices: Vec<usize>,
+    detail_requested: HashSet<(PackageKind, String)>,
+    refresh_metadata_after_operations: bool,
     tx: Sender<WorkerEvent>,
 }
 
@@ -105,13 +112,58 @@ impl App {
             failed_operations: 0,
             preview_visible: true,
             preview_scroll: 0,
+            tab_counts: [0; 4],
+            visible_indices: Vec::new(),
             detail_requested: HashSet::new(),
+            refresh_metadata_after_operations: false,
             tx,
         }
     }
 
-    pub fn filtered_indices(&self) -> Vec<usize> {
-        let mut results: Vec<(usize, i64)> = self
+    pub fn use_cached_catalog(&mut self, catalog: Catalog) {
+        self.catalog = catalog;
+        self.rebuild_tab_counts();
+        self.loading = true;
+        self.status = "Ready from cache · refreshing Homebrew state…".into();
+        self.rebuild_visible();
+    }
+
+    pub fn filtered_indices(&self) -> &[usize] {
+        &self.visible_indices
+    }
+
+    pub fn tab_count(&self, tab: Tab) -> usize {
+        match tab {
+            Tab::Browse => self.tab_counts[0],
+            Tab::Installed => self.tab_counts[1],
+            Tab::Outdated => self.tab_counts[2],
+            Tab::Casks => self.tab_counts[3],
+            Tab::Taps => self.catalog.taps.len(),
+        }
+    }
+
+    fn rebuild_tab_counts(&mut self) {
+        let mut browse = HashSet::new();
+        let mut installed = HashSet::new();
+        let mut outdated = HashSet::new();
+        let mut casks = HashSet::new();
+        for package in &self.catalog.packages {
+            browse.insert(package.name.as_str());
+            if package.installed {
+                installed.insert(package.name.as_str());
+            }
+            if package.outdated {
+                outdated.insert(package.name.as_str());
+            }
+            if package.kind == PackageKind::Cask {
+                casks.insert(package.name.as_str());
+            }
+        }
+        self.tab_counts = [browse.len(), installed.len(), outdated.len(), casks.len()];
+    }
+
+    fn rebuild_visible(&mut self) {
+        let candidates = self
             .catalog
             .packages
             .iter()
@@ -126,7 +178,19 @@ impl App {
             .filter_map(|(index, package)| {
                 fuzzy_score(&package.name, &self.query).map(|score| (index, score))
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        let mut deduplicated: HashMap<&str, (usize, i64)> = HashMap::new();
+        for (index, score) in candidates {
+            let package = &self.catalog.packages[index];
+            let entry = deduplicated
+                .entry(package.name.as_str())
+                .or_insert((index, score));
+            if duplicate_priority(package) > duplicate_priority(&self.catalog.packages[entry.0]) {
+                *entry = (index, score);
+            }
+        }
+        let mut results = deduplicated.into_values().collect::<Vec<_>>();
 
         results.sort_unstable_by(|(left_index, left_score), (right_index, right_score)| {
             let left = &self.catalog.packages[*left_index];
@@ -139,7 +203,10 @@ impl App {
                 self.compare_packages(left, right)
             }
         });
-        results.into_iter().map(|(index, _)| index).collect()
+        self.visible_indices = results.into_iter().map(|(index, _)| index).collect();
+        self.selected = self
+            .selected
+            .min(self.visible_indices.len().saturating_sub(1));
     }
 
     fn compare_packages(&self, left: &Package, right: &Package) -> Ordering {
@@ -157,8 +224,7 @@ impl App {
     }
 
     pub fn selected_package(&self) -> Option<&Package> {
-        let indices = self.filtered_indices();
-        indices
+        self.visible_indices
             .get(self.selected)
             .and_then(|index| self.catalog.packages.get(*index))
     }
@@ -200,9 +266,14 @@ impl App {
                 KeyCode::Char('a') if !self.queue.is_empty() && !self.running => self.run_queue(),
                 KeyCode::Char('p') if !self.running => self.toggle_pin(),
                 KeyCode::Char('r') if !self.loading && !self.running => self.refresh(),
+                KeyCode::Char('g') if !self.running => {
+                    self.queue = vec![Operation::UpgradeAll];
+                    self.run_queue();
+                }
                 KeyCode::Char('s') => {
                     self.sort = self.sort.next();
                     self.selected = 0;
+                    self.rebuild_visible();
                 }
                 KeyCode::Char('u') if !self.running => {
                     self.queue = vec![Operation::Update];
@@ -228,6 +299,7 @@ impl App {
             KeyCode::Backspace => {
                 self.query.pop();
                 self.selected = 0;
+                self.rebuild_visible();
             }
             KeyCode::Down => self.move_selection(1),
             KeyCode::Up => self.move_selection(-1),
@@ -239,12 +311,14 @@ impl App {
                 if !self.query.is_empty() {
                     self.query.clear();
                     self.selected = 0;
+                    self.rebuild_visible();
                 }
             }
             KeyCode::Char(' ') if !self.running => self.toggle_stage(),
             KeyCode::Char(ch) if !ch.is_control() => {
                 self.query.push(ch);
                 self.selected = 0;
+                self.rebuild_visible();
             }
             _ => {}
         }
@@ -262,7 +336,7 @@ impl App {
         if self.tab == Tab::Taps {
             self.catalog.taps.len()
         } else {
-            self.filtered_indices().len()
+            self.visible_indices.len()
         }
     }
 
@@ -280,6 +354,7 @@ impl App {
         let next = (current + delta).rem_euclid(Tab::ALL.len() as isize) as usize;
         self.tab = Tab::ALL[next];
         self.selected = 0;
+        self.rebuild_visible();
     }
 
     fn toggle_stage(&mut self) {
@@ -309,6 +384,9 @@ impl App {
         self.failed_operations = 0;
         self.log.clear();
         let operations = std::mem::take(&mut self.queue);
+        self.refresh_metadata_after_operations = operations
+            .iter()
+            .any(|operation| matches!(operation, Operation::Update));
         brew::run_operations(operations, self.tx.clone());
     }
 
@@ -339,20 +417,33 @@ impl App {
     }
 
     pub fn refresh(&mut self) {
+        self.refresh_catalog(false);
+    }
+
+    fn refresh_catalog(&mut self, force_metadata: bool) {
         self.loading = true;
         self.status = "Refreshing Homebrew catalog…".into();
-        brew::load_catalog(self.tx.clone());
+        brew::load_catalog(self.tx.clone(), force_metadata);
     }
 
     pub fn request_selected_detail(&mut self) {
         if !self.preview_visible || self.loading {
             return;
         }
-        let Some(name) = self.selected_package().map(|package| package.name.clone()) else {
+        let Some((kind, name, has_description)) = self.selected_package().map(|package| {
+            (
+                package.kind,
+                package.name.clone(),
+                package.description.is_some(),
+            )
+        }) else {
             return;
         };
-        if self.detail_requested.insert(name.clone()) {
-            brew::load_detail(name, self.tx.clone());
+        if has_description {
+            return;
+        }
+        if self.detail_requested.insert((kind, name.clone())) {
+            brew::load_detail(name, kind, self.tx.clone());
         }
     }
 
@@ -360,8 +451,10 @@ impl App {
         match event {
             WorkerEvent::CatalogLoaded(Ok(catalog)) => {
                 self.catalog = catalog;
+                self.rebuild_tab_counts();
                 self.detail_requested.clear();
                 self.loading = false;
+                self.rebuild_visible();
                 self.selected = self.selected.min(self.item_count().saturating_sub(1));
                 self.status = format!(
                     "Ready · {} installed · {} outdated",
@@ -375,14 +468,12 @@ impl App {
             }
             WorkerEvent::DetailLoaded {
                 requested_name,
+                requested_kind,
                 result: Ok(details),
             } => {
-                if let Some(package) = self
-                    .catalog
-                    .packages
-                    .iter_mut()
-                    .find(|package| package.name == requested_name)
-                {
+                if let Some(package) = self.catalog.packages.iter_mut().find(|package| {
+                    package.name == requested_name && package.kind == requested_kind
+                }) {
                     let installed = package.installed;
                     let outdated = package.outdated;
                     *package = details;
@@ -392,9 +483,11 @@ impl App {
             }
             WorkerEvent::DetailLoaded {
                 requested_name,
+                requested_kind,
                 result: Err(_),
             } => {
-                self.detail_requested.remove(&requested_name);
+                self.detail_requested
+                    .remove(&(requested_kind, requested_name));
             }
             WorkerEvent::Log(line) => {
                 self.log.push(line);
@@ -417,7 +510,9 @@ impl App {
                 } else {
                     format!("Stopped after {} failed operation", self.failed_operations)
                 };
-                self.refresh();
+                let force_metadata = self.refresh_metadata_after_operations;
+                self.refresh_metadata_after_operations = false;
+                self.refresh_catalog(force_metadata);
             }
         }
     }
@@ -428,6 +523,14 @@ impl App {
             .filter_map(Operation::package_name)
             .collect()
     }
+}
+
+fn duplicate_priority(package: &Package) -> (bool, bool, bool) {
+    (
+        package.outdated,
+        package.installed,
+        package.kind == PackageKind::Formula,
+    )
 }
 
 #[cfg(test)]
@@ -445,6 +548,7 @@ mod tests {
         app.catalog
             .packages
             .push(Package::new("jq".to_string(), PackageKind::Formula));
+        app.rebuild_visible();
         app
     }
 
@@ -473,5 +577,28 @@ mod tests {
 
         app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn general_views_deduplicate_formula_and_cask_names() {
+        let (tx, _) = mpsc::channel();
+        let mut app = App::new(tx);
+        app.catalog
+            .packages
+            .push(Package::new("demo".into(), PackageKind::Formula));
+        app.catalog
+            .packages
+            .push(Package::new("demo".into(), PackageKind::Cask));
+
+        app.rebuild_visible();
+        assert_eq!(app.filtered_indices().len(), 1);
+        app.rebuild_tab_counts();
+        assert_eq!(app.tab_count(Tab::Browse), 1);
+        assert_eq!(app.selected_package().unwrap().kind, PackageKind::Formula);
+
+        app.tab = Tab::Casks;
+        app.rebuild_visible();
+        assert_eq!(app.filtered_indices().len(), 1);
+        assert_eq!(app.selected_package().unwrap().kind, PackageKind::Cask);
     }
 }
