@@ -7,6 +7,11 @@ class Brewy < Formula
   license "MIT"
   head "https://github.com/Hexadecimall/homebrew-brewy.git", branch: "main"
 
+  bottle do
+    root_url "https://raw.githubusercontent.com/Hexadecimall/homebrew-brewy/main/bottles"
+    sha256 cellar: :any_skip_relocation, arm64_golden_gate: "bb5107f5e2d68bb4158c555fa847e2d41aa3abd19b1d247b8b06ac59512da733"
+  end
+
   depends_on "rust" => :build
   depends_on :macos
 
